@@ -215,13 +215,22 @@ const server = Bun.serve({
                 return new Response('Resource invalid', {status: 500});
             }
             const resourceContent = resource.contents[0];
-            const values: Record<string, string> = {};
+            const values: Record<string, string | boolean> = {};
             let missing = false;
             Object.entries(tool.inputSchema.properties!).forEach(([key, defn]) => {
                 const value = url.searchParams.get(key);
                 const required = tool.inputSchema.required?.includes(key);
                 if (value) {
-                    values[key] = value;
+                    switch ((defn as {type: string}).type) {
+                        case 'boolean':
+                            values[key] = value === 'true';
+                            break;
+                        case 'string':
+                            values[key] = value;
+                            break;
+                        default:
+                            throw new Error(`not handling input property with schema ${JSON.stringify(defn)}`);
+                    }
                 } else if (required) {
                     missing = true;
                 }
@@ -238,11 +247,14 @@ const server = Bun.serve({
                 name: tool.name,
                 arguments: values,
             });
+            if (!result.structuredContent) {
+                return new Response(JSON.stringify(result));
+            }
 
             return new Response(
                 (resourceContent.text as string).replace(
                     '</head>',
-                    `<script>openai = {toolOutput: ${JSON.stringify(result.structuredContent)}}</script></head>`,
+                    () => `<script>openai = {toolOutput: ${JSON.stringify(result.structuredContent)}}</script></head>`,
                 ),
                 {
                     headers: {
