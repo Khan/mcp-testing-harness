@@ -88,19 +88,22 @@ const server = Bun.serve({
                 return new Response("tool doesn't have openai/outputTemplate defined", {status: 400});
             }
 
-            const values: Record<string, string> = {};
-            let missing = false;
             const fields = Object.entries(tool.inputSchema.properties!).map(([key, defn]) => {
                 const value = url.searchParams.get(key);
                 const required = tool.inputSchema.required?.includes(key);
-                if (value) {
-                    values[key] = value;
-                } else if (required) {
-                    missing = true;
+
+                switch ((defn as {type: string}).type) {
+                    case 'boolean':
+                        return `${key}: <input name="${key}" type="checkbox" value="${value ?? ''}" placeholder="${key}" />${
+                            required ? ` - required` : ''
+                        }`;
+                    case 'string':
+                        return `${key}: <input style="width:600px" name="${key}" value="${value ?? ''}" placeholder="${key}" />${
+                            required ? ` - required` : ''
+                        }`;
+                    default:
+                        throw new Error(`not handling input property with schema ${JSON.stringify(defn)}`);
                 }
-                return `${key}: <input style="width:600px" name="${key}" value="${value ?? ''}" placeholder="${key}" />${
-                    required ? ` - required` : ''
-                }`;
             });
             formItems.push(
                 `<ul>
@@ -216,27 +219,27 @@ const server = Bun.serve({
             }
             const resourceContent = resource.contents[0];
             const values: Record<string, string | boolean> = {};
-            let missing = false;
+            const missing: string[] = [];
             Object.entries(tool.inputSchema.properties!).forEach(([key, defn]) => {
                 const value = url.searchParams.get(key);
                 const required = tool.inputSchema.required?.includes(key);
-                if (value) {
-                    switch ((defn as {type: string}).type) {
-                        case 'boolean':
-                            values[key] = value === 'true';
-                            break;
-                        case 'string':
+                switch ((defn as {type: string}).type) {
+                    case 'boolean':
+                        values[key] = value === 'true';
+                        break;
+                    case 'string':
+                        if (value) {
                             values[key] = value;
-                            break;
-                        default:
-                            throw new Error(`not handling input property with schema ${JSON.stringify(defn)}`);
-                    }
-                } else if (required) {
-                    missing = true;
+                        } else if (required) {
+                            missing.push(key);
+                        }
+                        break;
+                    default:
+                        throw new Error(`not handling input property with schema ${JSON.stringify(defn)}`);
                 }
             });
-            if (missing) {
-                throw new Error(`missing required values`);
+            if (missing.length) {
+                throw new Error(`missing required values: ${missing}`);
             }
 
             const widgetCSP = resourceContent._meta!['openai/widgetCSP'];
