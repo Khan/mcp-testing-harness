@@ -4,19 +4,111 @@ import Bun from 'bun';
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
+const showForm = (formItems: string[]) =>
+    new Response(
+        `<html>
+<body>
+<form method="GET" action="/">
+${formItems.join('<br/>\n')}
+<button type="submit">Next</button>
+</form>
+</body>`,
+        {
+            headers: {'Content-type': 'text/html'},
+        },
+    );
+
+const showIframeForm = (formItems: string[], initialUrl: string) =>
+    new Response(
+        `<html>
+<body>
+<form method="GET" action="/embed" target="embed">
+${formItems.join('<br/>\n')}
+<button type="submit">Submit</button>
+</form>
+<iframe name="embed" style="width:100vw;height:100vh" />
+</body>`,
+        {
+            headers: {'Content-type': 'text/html'},
+        },
+    );
+
 const server = Bun.serve({
     port: 3112,
     // `routes` requires Bun v1.2.3+
     routes: {
-        // Static routes
         '/': async (req) => {
+            const formItems: string[] = [];
+
             const url = new URL(req.url);
-            const query = url.searchParams.get('query') ?? 'dividing fractions';
+            const serverUrl = url.searchParams.get('url');
+            formItems.push(`<input name="url" value="${serverUrl}" placeholder="MCP URL" />`);
+            if (!serverUrl) {
+                return showForm(formItems);
+            }
+
+            const transport = new SSEClientTransport(new URL(serverUrl));
+
+            const client = new Client({
+                name: 'example-client',
+                version: '1.0.0',
+            });
+
+            try {
+                await client.connect(transport);
+            } catch (err) {
+                return new Response(`Unable to connect. Retrying in 3 seconds. ${err}`, {
+                    headers: {
+                        'Content-type': 'text/html',
+                        status: '400',
+                        Refresh: '3',
+                    },
+                });
+            }
+
+            const {tools} = await client.listTools();
+
+            const toolName = url.searchParams.get('tool');
+            formItems.push(`<select name="tool" value="${toolName}">
+    ${tools.map((tool) => `<option value="${tool.name}">${tool.name}</option>`).join('\n')}
+    </select>`);
+            if (!toolName) {
+                return showForm(formItems);
+            }
+
+            const tool = tools.find((tool) => tool.name === toolName);
+            if (!tool) {
+                return new Response('tool not found', {status: 400});
+            }
+
+            const tpl = tool._meta?.['openai/outputTemplate'] as string | null;
+            if (!tpl) {
+                return new Response("tool doesn't have openai/outputTemplate defined", {status: 400});
+            }
+
+            const values: Record<string, string> = {};
+            let missing = false;
+            Object.entries(tool.inputSchema.properties!).forEach(([key, defn]) => {
+                const value = url.searchParams.get(key);
+                const required = tool.inputSchema.required?.includes(key);
+                if (value) {
+                    values[key] = value;
+                } else if (required) {
+                    missing = true;
+                }
+                formItems.push(`<input name="${key}" value="${value ?? ''}" placeholder="${key}" />${required ? ` - required` : ''}`);
+            });
+            if (missing) {
+                return showForm(formItems);
+            }
+
+            return showIframeForm(formItems, `/preview${url.search}`);
+        },
+        '/preview': async (req) => {
+            const url = new URL(req.url);
             const serverUrl = url.searchParams.get('url');
             if (!serverUrl) {
-                return new Response('No ?url param provided. Please give the url of the mcp server', {
-                    status: 400,
-                });
+                throw new Error(`No url`);
             }
             const transport = new SSEClientTransport(new URL(serverUrl));
 
@@ -28,45 +120,121 @@ const server = Bun.serve({
             try {
                 await client.connect(transport);
             } catch (err) {
-                return new Response('sorry', {
+                return new Response(`Unable to connect. Retrying in 3 seconds. ${err}`, {
                     headers: {
+                        'Content-type': 'text/html',
+                        status: '400',
                         Refresh: '3',
                     },
                 });
             }
 
-            // List resources
-            const {resources} = await client.listResources();
-
-            if (!resources[0]) {
-                return new Response('Resource not found', {status: 500});
+            const toolName = url.searchParams.get('tool');
+            if (!toolName) {
+                throw new Error(`tool`);
             }
 
-            // // Read a resource
+            const {tools} = await client.listTools();
+            const tool = tools.find((tool) => tool.name === toolName);
+            if (!tool) {
+                return new Response('tool not found', {status: 400});
+            }
+            const tpl = tool._meta?.['openai/outputTemplate'] as string | null;
+            if (!tpl) {
+                return new Response("tool doesn't have openai/outputTemplate defined", {status: 400});
+            }
             const resource = await client.readResource({
-                uri: resources[0].uri,
+                uri: tpl,
             });
             if (!resource.contents[0]) {
                 return new Response('Resource invalid', {status: 500});
             }
+            const resourceContent = resource.contents[0];
 
-            const widgetCSP = resource.contents[0]!._meta!['openai/widgetCSP'];
+            const widgetCSP = resourceContent._meta!['openai/widgetCSP'];
             const csp = typeof widgetCSP === 'object' && widgetCSP && 'resource_domains' in widgetCSP ? (widgetCSP.resource_domains as string[]) : [];
 
-            const {tools} = await client.listTools();
-
-            if (!tools[0]) {
-                return new Response('Tool not found', {status: 500});
+            return new Response(resourceContent.text as string, {
+                headers: {
+                    'content-type': 'text/html',
+                    'Content-Security-Policy': `default-src 'unsafe-inline' data: http://localhost:3112 wss://localhost:8225 https://localhost:8226 ${csp.join(
+                        ' ',
+                    )}`,
+                },
+            });
+        },
+        '/embed': async (req) => {
+            const url = new URL(req.url);
+            const serverUrl = url.searchParams.get('url');
+            if (!serverUrl) {
+                throw new Error(`No url`);
             }
+            const transport = new SSEClientTransport(new URL(serverUrl));
+
+            const client = new Client({
+                name: 'example-client',
+                version: '1.0.0',
+            });
+
+            try {
+                await client.connect(transport);
+            } catch (err) {
+                return new Response(`Unable to connect. Retrying in 3 seconds. ${err}`, {
+                    headers: {
+                        'Content-type': 'text/html',
+                        status: '400',
+                        Refresh: '3',
+                    },
+                });
+            }
+
+            const toolName = url.searchParams.get('tool');
+            if (!toolName) {
+                throw new Error(`tool`);
+            }
+
+            const {tools} = await client.listTools();
+            const tool = tools.find((tool) => tool.name === toolName);
+            if (!tool) {
+                return new Response('tool not found', {status: 400});
+            }
+            const tpl = tool._meta?.['openai/outputTemplate'] as string | null;
+            if (!tpl) {
+                return new Response("tool doesn't have openai/outputTemplate defined", {status: 400});
+            }
+            const resource = await client.readResource({
+                uri: tpl,
+            });
+            if (!resource.contents[0]) {
+                return new Response('Resource invalid', {status: 500});
+            }
+            const resourceContent = resource.contents[0];
+            const values: Record<string, string> = {};
+            let missing = false;
+            Object.entries(tool.inputSchema.properties!).forEach(([key, defn]) => {
+                const value = url.searchParams.get(key);
+                const required = tool.inputSchema.required?.includes(key);
+                if (value) {
+                    values[key] = value;
+                } else if (required) {
+                    missing = true;
+                }
+            });
+            if (missing) {
+                throw new Error(`missing required values`);
+            }
+
+            const widgetCSP = resourceContent._meta!['openai/widgetCSP'];
+            const csp = typeof widgetCSP === 'object' && widgetCSP && 'resource_domains' in widgetCSP ? (widgetCSP.resource_domains as string[]) : [];
 
             // Call a tool
             const result = await client.callTool({
-                name: tools[0].name,
-                arguments: {query},
+                name: tool.name,
+                arguments: values,
             });
 
             return new Response(
-                (resource.contents[0].text as string).replace(
+                (resourceContent.text as string).replace(
                     '</head>',
                     `<script>openai = {toolOutput: ${JSON.stringify(result.structuredContent)}}</script></head>`,
                 ),
@@ -81,6 +249,7 @@ const server = Bun.serve({
             );
         },
     },
+    idleTimeout: 100,
 });
 
 console.log(`serving http://localhost:${server.port}`);
