@@ -4,11 +4,12 @@ import Bun from 'bun';
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-const showForm = (formItems: string[]) =>
+const showForm = (url: string, formItems: string[]) =>
     new Response(
         `<html>
 <body>
 <h1>MCP Testing Harness</h1>
+<a href="/?url=${encodeURIComponent(url)}">Reset</a>
 <form method="GET" action="/">
 ${formItems.join('<br/>\n')}
 <button type="submit">Next</button>
@@ -19,11 +20,12 @@ ${formItems.join('<br/>\n')}
         },
     );
 
-const showIframeForm = (formItems: string[], initialUrl: string) =>
+const showIframeForm = (url: string, formItems: string[], initialUrl: string) =>
     new Response(
         `<html>
 <body>
 <h1>MCP Testing Harness</h1>
+<a href="/?url=${encodeURIComponent(url)}">Reset</a>
 <form method="GET" action="/embed" target="embed">
 ${formItems.join('<br/>\n')}
 <button type="submit">Submit</button>
@@ -46,7 +48,7 @@ const server = Bun.serve({
             const serverUrl = url.searchParams.get('url');
             formItems.push(`URL: <input style="width:600px" name="url" value="${serverUrl ?? ''}" placeholder="MCP URL" />`);
             if (!serverUrl) {
-                return showForm(formItems);
+                return showForm('', formItems);
             }
 
             const transport = new SSEClientTransport(new URL(serverUrl));
@@ -75,7 +77,7 @@ const server = Bun.serve({
     ${tools.map((tool) => `<option value="${tool.name}">${tool.name}</option>`).join('\n')}
     </select>`);
             if (!toolName) {
-                return showForm(formItems);
+                return showForm(serverUrl, formItems);
             }
 
             const tool = tools.find((tool) => tool.name === toolName);
@@ -85,6 +87,7 @@ const server = Bun.serve({
 
             const tpl = tool._meta?.['openai/outputTemplate'] as string | null;
             if (!tpl) {
+                console.log(tool._meta);
                 return new Response("tool doesn't have openai/outputTemplate defined", {status: 400});
             }
 
@@ -111,7 +114,7 @@ const server = Bun.serve({
                 </ul>`,
             );
 
-            return showIframeForm(formItems, `/preview${url.search}`);
+            return showIframeForm(serverUrl, formItems, `/preview${url.search}`);
         },
         '/preview': async (req) => {
             const url = new URL(req.url);
