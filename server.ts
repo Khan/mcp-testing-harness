@@ -8,6 +8,7 @@ const showForm = (formItems: string[]) =>
     new Response(
         `<html>
 <body>
+<h1>MCP Testing Harness</h1>
 <form method="GET" action="/">
 ${formItems.join('<br/>\n')}
 <button type="submit">Next</button>
@@ -22,11 +23,12 @@ const showIframeForm = (formItems: string[], initialUrl: string) =>
     new Response(
         `<html>
 <body>
+<h1>MCP Testing Harness</h1>
 <form method="GET" action="/embed" target="embed">
 ${formItems.join('<br/>\n')}
 <button type="submit">Submit</button>
 </form>
-<iframe name="embed" style="width:100vw;height:100vh" />
+<iframe name="embed" style="width: 50vw;min-width:300px;min-height:500px;height:50vh" src="${initialUrl}" />
 </body>`,
         {
             headers: {'Content-type': 'text/html'},
@@ -42,7 +44,7 @@ const server = Bun.serve({
 
             const url = new URL(req.url);
             const serverUrl = url.searchParams.get('url');
-            formItems.push(`<input name="url" value="${serverUrl}" placeholder="MCP URL" />`);
+            formItems.push(`URL: <input style="width:600px" name="url" value="${serverUrl ?? ''}" placeholder="MCP URL" />`);
             if (!serverUrl) {
                 return showForm(formItems);
             }
@@ -69,7 +71,7 @@ const server = Bun.serve({
             const {tools} = await client.listTools();
 
             const toolName = url.searchParams.get('tool');
-            formItems.push(`<select name="tool" value="${toolName}">
+            formItems.push(`Tool: <select name="tool" value="${toolName}">
     ${tools.map((tool) => `<option value="${tool.name}">${tool.name}</option>`).join('\n')}
     </select>`);
             if (!toolName) {
@@ -88,7 +90,7 @@ const server = Bun.serve({
 
             const values: Record<string, string> = {};
             let missing = false;
-            Object.entries(tool.inputSchema.properties!).forEach(([key, defn]) => {
+            const fields = Object.entries(tool.inputSchema.properties!).map(([key, defn]) => {
                 const value = url.searchParams.get(key);
                 const required = tool.inputSchema.required?.includes(key);
                 if (value) {
@@ -96,11 +98,15 @@ const server = Bun.serve({
                 } else if (required) {
                     missing = true;
                 }
-                formItems.push(`<input name="${key}" value="${value ?? ''}" placeholder="${key}" />${required ? ` - required` : ''}`);
+                return `${key}: <input style="width:600px" name="${key}" value="${value ?? ''}" placeholder="${key}" />${
+                    required ? ` - required` : ''
+                }`;
             });
-            if (missing) {
-                return showForm(formItems);
-            }
+            formItems.push(
+                `<ul>
+                ${fields.map((item) => `<li>${item}</li>`).join('\n')}
+                </ul>`,
+            );
 
             return showIframeForm(formItems, `/preview${url.search}`);
         },
