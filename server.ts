@@ -104,6 +104,10 @@ const server = Bun.serve({
 					const required = tool.inputSchema.required?.includes(key);
 
 					switch ((defn as { type: string }).type) {
+						case "integer":
+							return `${key}: <input name="${key}" type="number" value="${value ?? ""}" placeholder="${key}" />${
+								required ? ` - required` : ""
+							}`;
 						case "boolean":
 							return `${key}: <input name="${key}" type="checkbox" value="${value ?? ""}" placeholder="${key}" />${
 								required ? ` - required` : ""
@@ -247,7 +251,7 @@ const server = Bun.serve({
 				return new Response("Resource invalid", { status: 500 });
 			}
 			const resourceContent = resource.contents[0];
-			const values: Record<string, string | boolean> = {};
+			const values: Record<string, string | boolean | number | undefined> = {};
 			const missing: string[] = [];
 			Object.entries(tool.inputSchema.properties!).forEach(([key, defn]) => {
 				const value = url.searchParams.get(key);
@@ -255,6 +259,9 @@ const server = Bun.serve({
 				switch ((defn as { type: string }).type) {
 					case "boolean":
 						values[key] = value === "true";
+						break;
+					case "integer":
+						values[key] = value ? +value : undefined;
 						break;
 					case "string":
 						if (value) {
