@@ -7,6 +7,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 const showForm = (url: string, formItems: string[]) =>
 	new Response(
 		`<html>
+        <title>MCP Testing Harness</title>
 <body>
 <h1>MCP Testing Harness</h1>
 <a href="/?url=${encodeURIComponent(url)}">Reset</a>
@@ -23,6 +24,7 @@ ${formItems.join("<br/>\n")}
 const showIframeForm = (url: string, formItems: string[], initialUrl: string) =>
 	new Response(
 		`<html>
+        <title>MCP Testing Harness</title>
 <body>
 <h1>MCP Testing Harness</h1>
 <a href="/?url=${encodeURIComponent(url)}">Reset</a>
@@ -293,17 +295,34 @@ const server = Bun.serve({
 			const result = await client.callTool({
 				name: tool.name,
 				arguments: values,
+				_meta: {
+					"openai/meta": "some-meta-value",
+				},
 			});
 			if (!result.structuredContent) {
 				return new Response(JSON.stringify(result));
 			}
 
 			return new Response(
-				(resourceContent.text as string).replace(
-					"</head>",
-					() =>
-						`<script>openai = {toolOutput: ${JSON.stringify(result.structuredContent)}}</script></head>`,
-				),
+				(resourceContent.text as string)
+					.replace(
+						"</head>",
+						() =>
+							`<script>openai = {toolOutput: ${JSON.stringify(result.structuredContent)}}</script></head>`,
+					)
+					.replace(
+						"</body>",
+						() =>
+							`<pre>Structured content:\n\n${JSON.stringify(
+								result.structuredContent,
+								null,
+								2,
+							).replace(
+								"<",
+								"&lt;",
+							)}\nMeta:\n${JSON.stringify(result._meta, null, 2)}</pre>
+                            </body>`,
+					),
 				{
 					headers: {
 						"content-type": "text/html",
